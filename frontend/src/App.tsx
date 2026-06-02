@@ -5,6 +5,9 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import LandingPage from './pages/LandingPage';
+import PaymentRequestsPage from './pages/PaymentRequestsPage';
+import TransactionHistoryPage from './pages/TransactionHistoryPage';
+import ProfilePage from './pages/ProfilePage';
 import { useNavigate} from "react-router-dom";
 import React from "react";
 import './App.css';
@@ -38,14 +41,20 @@ const Navigation = () => {
                     MKPay
                 </Link>
 
-                <div className="d-flex gap-2">
+                <div className="d-flex align-items-center gap-2">
                     {isAuthenticated ? (
-                        <button
-                            className="btn btn-outline-danger"
-                            onClick={handleLogout}
-                        >
-                            Logout
-                        </button>
+                        <>
+                            <Link className="btn btn-link text-decoration-none" to="/dashboard">Dashboard</Link>
+                            <Link className="btn btn-link text-decoration-none" to="/payment-requests">Requests</Link>
+                            <Link className="btn btn-link text-decoration-none" to="/transactions">History</Link>
+                            <Link className="btn btn-link text-decoration-none" to="/profile">Profile</Link>
+                            <button
+                                className="btn btn-outline-danger"
+                                onClick={handleLogout}
+                            >
+                                Logout
+                            </button>
+                        </>
                     ) : (
                         <>
                             <Link to="/login">
@@ -103,6 +112,32 @@ function App() {
                         element={
                             <ProtectedRoute>
                                 <DashboardPage />
+                            </ProtectedRoute>
+                        }
+                    />
+
+                    {/* Protected pages */}
+                    <Route
+                        path="/payment-requests"
+                        element={
+                            <ProtectedRoute>
+                                <PaymentRequestsPage />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/transactions"
+                        element={
+                            <ProtectedRoute>
+                                <TransactionHistoryPage />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/profile"
+                        element={
+                            <ProtectedRoute>
+                                <ProfilePage />
                             </ProtectedRoute>
                         }
                     />
