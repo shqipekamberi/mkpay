@@ -14,9 +14,9 @@ export interface PaymentRequest {
 }
 
 export interface CreatePaymentRequestDto {
-    recipientEmail: string;
+    requesteeEmail: string;
     amount: number;
-    description?: string;
+    description: string;
 }
 
 export const paymentRequestService = {

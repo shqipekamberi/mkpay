@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using MKPay.Core.DTOs.Common;
 using MKPay.Core.DTOs.Transaction;
 using MKPay.Core.Entities;
@@ -6,6 +7,7 @@ using MKPay.Core.Enums;
 using MKPay.Core.Exceptions;
 using MKPay.Core.Interfaces;
 using MKPay.Core.Interfaces.Services;
+using MKPay.Infrastructure.Data;
 using MKPay.Infrastructure.Utils;
 
 namespace MKPay.Infrastructure.Services;
@@ -14,128 +16,140 @@ public class TransactionService : ITransactionService
 {
     private readonly IUnitOfWork _unitOfWork;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly ApplicationDbContext _context;
+    private readonly IEmailService _emailService;
 
     public TransactionService(
         IUnitOfWork unitOfWork,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        ApplicationDbContext context,
+        IEmailService emailService)
     {
         _unitOfWork = unitOfWork;
         _userManager = userManager;
+        _context = context;
+        _emailService = emailService;
     }
 
     public async Task<TransactionResponseDto> SendMoneyAsync(Guid senderId, SendMoneyRequestDto request)
     {
-        // Start database transaction for atomicity
-        await _unitOfWork.BeginTransactionAsync();
+        TransactionResponseDto result = null!;
 
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
         {
-            // 1. Get sender's account
-            var senderAccount = await _unitOfWork.Accounts.GetByUserIdAsync(senderId);
-            if (senderAccount == null)
+            await _unitOfWork.BeginTransactionAsync();
+            try
             {
-                throw new MKPayException("Sender account not found");
+                // 1. Get sender's account
+                var senderAccount = await _unitOfWork.Accounts.GetByUserIdAsync(senderId);
+                if (senderAccount == null)
+                    throw new MKPayException("Sender account not found");
+
+                // 2. Find receiver by email
+                var receiver = await _userManager.FindByEmailAsync(request.ReceiverEmail);
+                if (receiver == null)
+                    throw new UserNotFoundException(request.ReceiverEmail);
+
+                // 3. Get receiver's account
+                var receiverAccount = await _unitOfWork.Accounts.GetByUserIdAsync(receiver.Id);
+                if (receiverAccount == null)
+                    throw new MKPayException("Receiver account not found");
+
+                // 4. Validate sender cannot send to themselves
+                if (senderAccount.Id == receiverAccount.Id)
+                    throw new InvalidTransactionException("Cannot send money to yourself");
+
+                // 5. Check sufficient balance
+                if (!await _unitOfWork.Accounts.HasSufficientBalanceAsync(senderAccount.Id, request.Amount))
+                    throw new InsufficientBalanceException(request.Amount, senderAccount.Balance);
+
+                // 6. Check both accounts are active
+                if (!senderAccount.IsActive || !receiverAccount.IsActive)
+                    throw new MKPayException("One or both accounts are not active");
+
+                // 7. Create transaction
+                var transaction = new Transaction
+                {
+                    SenderAccountId = senderAccount.Id,
+                    ReceiverAccountId = receiverAccount.Id,
+                    Amount = request.Amount,
+                    Currency = Enum.Parse<Currency>(request.Currency),
+                    Status = TransactionStatus.Pending,
+                    Type = TransactionType.Transfer,
+                    Description = request.Description,
+                    ReferenceNumber = TransactionReferenceGenerator.Generate(),
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                await _unitOfWork.Transactions.AddAsync(transaction);
+
+                // 8. Update balances
+                senderAccount.Balance -= request.Amount;
+                senderAccount.UpdatedAt = DateTime.UtcNow;
+                await _unitOfWork.Accounts.UpdateAsync(senderAccount);
+
+                receiverAccount.Balance += request.Amount;
+                receiverAccount.UpdatedAt = DateTime.UtcNow;
+                await _unitOfWork.Accounts.UpdateAsync(receiverAccount);
+
+                // 9. Mark transaction as completed
+                transaction.Status = TransactionStatus.Completed;
+                transaction.UpdatedAt = DateTime.UtcNow;
+
+                // 10. Log the transaction
+                await _unitOfWork.AuditLogs.LogActionAsync(
+                    senderId,
+                    "MoneyTransfer",
+                    "Transaction",
+                    transaction.Id,
+                    $"Transferred {request.Amount} {request.Currency} to {request.ReceiverEmail}",
+                    "System",
+                    "System"
+                );
+
+                // 11. Commit
+                await _unitOfWork.CommitTransactionAsync();
+
+                var sender = await _userManager.FindByIdAsync(senderId.ToString());
+                result = new TransactionResponseDto
+                {
+                    Id = transaction.Id,
+                    ReferenceNumber = transaction.ReferenceNumber!,
+                    Amount = transaction.Amount,
+                    Currency = transaction.Currency.ToString(),
+                    Status = transaction.Status.ToString(),
+                    Type = transaction.Type.ToString(),
+                    Description = transaction.Description,
+                    CreatedAt = transaction.CreatedAt,
+                    SenderName = $"{sender!.FirstName} {sender.LastName}",
+                    SenderEmail = sender.Email!,
+                    ReceiverName = $"{receiver.FirstName} {receiver.LastName}",
+                    ReceiverEmail = receiver.Email!
+                };
             }
-
-            // 2. Find receiver by email
-            var receiver = await _userManager.FindByEmailAsync(request.ReceiverEmail);
-            if (receiver == null)
+            catch (Exception)
             {
-                throw new UserNotFoundException(request.ReceiverEmail);
+                await _unitOfWork.RollbackTransactionAsync();
+                throw;
             }
+        });
 
-            // 3. Get receiver's account
-            var receiverAccount = await _unitOfWork.Accounts.GetByUserIdAsync(receiver.Id);
-            if (receiverAccount == null)
-            {
-                throw new MKPayException("Receiver account not found");
-            }
+        // 12. Send email notifications outside the DB transaction
+        await _emailService.SendTransactionNotificationAsync(
+            result.SenderEmail,
+            result.SenderName,
+            result.Amount,
+            "Debit"
+        );
+        await _emailService.SendTransactionNotificationAsync(
+            result.ReceiverEmail,
+            result.ReceiverName,
+            result.Amount,
+            "Credit"
+        );
 
-            // 4. Validate sender cannot send to themselves
-            if (senderAccount.Id == receiverAccount.Id)
-            {
-                throw new InvalidTransactionException("Cannot send money to yourself");
-            }
-
-            // 5. Check if sender has sufficient balance
-            if (!await _unitOfWork.Accounts.HasSufficientBalanceAsync(senderAccount.Id, request.Amount))
-            {
-                throw new InsufficientBalanceException(request.Amount, senderAccount.Balance);
-            }
-
-            // 6. Check if both accounts are active
-            if (!senderAccount.IsActive || !receiverAccount.IsActive)
-            {
-                throw new MKPayException("One or both accounts are not active");
-            }
-
-            // 7. Create transaction
-            var transaction = new Transaction
-            {
-                SenderAccountId = senderAccount.Id,
-                ReceiverAccountId = receiverAccount.Id,
-                Amount = request.Amount,
-                Currency = Enum.Parse<Currency>(request.Currency),
-                Status = TransactionStatus.Pending,
-                Type = TransactionType.Transfer,
-                Description = request.Description,
-                ReferenceNumber = TransactionReferenceGenerator.Generate(),
-                CreatedAt = DateTime.UtcNow
-            };
-
-            await _unitOfWork.Transactions.AddAsync(transaction);
-
-            // 8. Update balances
-            senderAccount.Balance -= request.Amount;
-            senderAccount.UpdatedAt = DateTime.UtcNow;
-            await _unitOfWork.Accounts.UpdateAsync(senderAccount);
-
-            receiverAccount.Balance += request.Amount;
-            receiverAccount.UpdatedAt = DateTime.UtcNow;
-            await _unitOfWork.Accounts.UpdateAsync(receiverAccount);
-
-            // 9. Mark transaction as completed
-            transaction.Status = TransactionStatus.Completed;
-            transaction.UpdatedAt = DateTime.UtcNow;
-            await _unitOfWork.Transactions.UpdateAsync(transaction);
-
-            // 10. Log the transaction
-            await _unitOfWork.AuditLogs.LogActionAsync(
-                senderId,
-                "MoneyTransfer",
-                "Transaction",
-                transaction.Id,
-                $"Transferred {request.Amount} {request.Currency} to {request.ReceiverEmail}",
-                "System",
-                "System"
-            );
-
-            // 11. Commit transaction
-            await _unitOfWork.CommitTransactionAsync();
-
-            // 12. Return response
-            var sender = await _userManager.FindByIdAsync(senderId.ToString());
-            return new TransactionResponseDto
-            {
-                Id = transaction.Id,
-                ReferenceNumber = transaction.ReferenceNumber!,
-                Amount = transaction.Amount,
-                Currency = transaction.Currency.ToString(),
-                Status = transaction.Status.ToString(),
-                Type = transaction.Type.ToString(),
-                Description = transaction.Description,
-                CreatedAt = transaction.CreatedAt,
-                SenderName = $"{sender!.FirstName} {sender.LastName}",
-                SenderEmail = sender.Email!,
-                ReceiverName = $"{receiver.FirstName} {receiver.LastName}",
-                ReceiverEmail = receiver.Email!
-            };
-        }
-        catch (Exception)
-        {
-            await _unitOfWork.RollbackTransactionAsync();
-            throw;
-        }
+        return result;
     }
 
     public async Task<TransactionResponseDto?> GetTransactionByIdAsync(Guid transactionId)

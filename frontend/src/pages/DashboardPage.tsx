@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
 import { authService } from '../services/authService';
 import { useNavigate } from 'react-router-dom';
 import { accountService } from '../services/accountService';
 import { transactionService } from '../services/transactionService';
+import { paymentRequestService } from '../services/paymentRequestService';
 
 const DashboardPage: React.FC = () => {
     const navigate = useNavigate();
@@ -22,19 +23,24 @@ const DashboardPage: React.FC = () => {
     const [requestAmount, setRequestAmount] = useState('');
     const [requestEmail, setRequestEmail] = useState('');
 
+    const refreshData = useCallback(async () => {
+        try {
+            const account = await accountService.getMyAccount();
+            setBalance(account.balance);
+
+            const txns = await transactionService.getMyTransactions();
+            setTransactions(txns.slice(0, 5));
+        } catch (error) {
+            console.error('Failed to refresh data:', error);
+        }
+    }, []);
+
     useEffect(() => {
         const fetchData = async () => {
             try {
                 const currentUser = authService.getCurrentUser();
                 setUser(currentUser);
-
-                // Fetch account balance
-                const account = await accountService.getMyAccount();
-                setBalance(account.balance);
-
-                // Fetch transaction history
-                const txns = await transactionService.getMyTransactions();
-                setTransactions(txns.slice(0, 5)); // Show last 5 transactions
+                await refreshData();
             } catch (error) {
                 console.error('Failed to fetch data:', error);
             } finally {
@@ -43,33 +49,41 @@ const DashboardPage: React.FC = () => {
         };
 
         fetchData();
-    }, []);
-    
+    }, [refreshData]);
 
-    const handleSendMoney = () => {
-        // Mock transaction - will connect to real API later
+    const handleSendMoney = async () => {
         const amount = parseFloat(sendAmount);
-        if (amount > 0) {
-            // For now, just show alert. Update balance when connected to API in the future
-            alert(`Successfully sent ${amount.toFixed(2)} MKD to ${sendEmail}`);
+        if (amount <= 0) {
+            alert('Please enter a valid amount');
+            return;
+        }
+        try {
+            await transactionService.sendMoney({ receiverEmail: sendEmail, amount });
             setShowSendModal(false);
             setSendAmount('');
             setSendEmail('');
-        } else {
-            alert('Please enter a valid amount');
+            alert(`Successfully sent ${amount.toFixed(2)} MKD to ${sendEmail}`);
+            await refreshData();
+        } catch (error: any) {
+            alert(error.response?.data?.message || 'Failed to send money. Please try again.');
         }
     };
 
-    const handleRequestMoney = () => {
-        // Mock request
+    const handleRequestMoney = async () => {
         const amount = parseFloat(requestAmount);
-        if (amount > 0) {
-            alert(`Request sent for ${amount.toFixed(2)} MKD to ${requestEmail}`);
+        if (amount <= 0) {
+            alert('Please enter a valid amount');
+            return;
+        }
+        try {
+            await paymentRequestService.createPaymentRequest({ requesteeEmail: requestEmail, amount, description: '' });
             setShowRequestModal(false);
             setRequestAmount('');
             setRequestEmail('');
-        } else {
-            alert('Please enter a valid amount');
+            alert(`Request sent for ${amount.toFixed(2)} MKD to ${requestEmail}`);
+            await refreshData();
+        } catch (error: any) {
+            alert(error.response?.data?.message || 'Failed to send request. Please try again.');
         }
     };
 

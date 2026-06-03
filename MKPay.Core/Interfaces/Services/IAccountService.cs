@@ -9,4 +9,6 @@ public interface IAccountService
     Task<AccountResponseDto> CreateAccountAsync(Guid userId);
     Task<decimal> GetBalanceAsync(Guid userId);
     Task<bool> HasSufficientBalanceAsync(Guid userId, decimal amount);
+    Task<UserProfileDto?> GetProfileAsync(Guid userId);
+    Task<UserProfileDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto);
 }

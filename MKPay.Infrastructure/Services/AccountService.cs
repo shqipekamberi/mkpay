@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Identity;
 using MKPay.Core.DTOs.Account;
 using MKPay.Core.Entities;
 using MKPay.Core.Enums;
@@ -6,16 +7,19 @@ using MKPay.Core.Interfaces;
 using MKPay.Core.Interfaces.Services;
 using MKPay.Infrastructure.Utils;
 using System.Collections.Generic;
+using System.Linq;
 
 
 namespace MKPay.Infrastructure.Services;
 public class AccountService : IAccountService
 {
     private readonly IUnitOfWork _unitOfWork;
+    private readonly UserManager<ApplicationUser> _userManager;
 
-    public AccountService(IUnitOfWork unitOfWork)
+    public AccountService(IUnitOfWork unitOfWork, UserManager<ApplicationUser> userManager)
     {
         _unitOfWork = unitOfWork;
+        _userManager = userManager;
     }
 
     public async Task<AccountResponseDto?> GetAccountByUserIdAsync(Guid userId)
@@ -106,6 +110,49 @@ public class AccountService : IAccountService
             return false;
 
         return await _unitOfWork.Accounts.HasSufficientBalanceAsync(account.Id, amount);
+    }
+
+    public async Task<UserProfileDto?> GetProfileAsync(Guid userId)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString());
+        if (user == null)
+            return null;
+
+        return new UserProfileDto
+        {
+            Id = user.Id,
+            FirstName = user.FirstName,
+            LastName = user.LastName,
+            Email = user.Email ?? string.Empty,
+            ProfilePictureUrl = user.ProfilePictureUrl
+        };
+    }
+
+    public async Task<UserProfileDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString());
+        if (user == null)
+            throw new MKPayException("User not found");
+
+        user.FirstName = dto.FirstName;
+        user.LastName = dto.LastName;
+        user.ProfilePictureUrl = dto.ProfilePictureUrl;
+
+        var result = await _userManager.UpdateAsync(user);
+        if (!result.Succeeded)
+        {
+            var errors = string.Join(", ", result.Errors.Select(e => e.Description));
+            throw new MKPayException($"Failed to update profile: {errors}");
+        }
+
+        return new UserProfileDto
+        {
+            Id = user.Id,
+            FirstName = user.FirstName,
+            LastName = user.LastName,
+            Email = user.Email ?? string.Empty,
+            ProfilePictureUrl = user.ProfilePictureUrl
+        };
     }
 
     private AccountResponseDto MapToDto(Account account)

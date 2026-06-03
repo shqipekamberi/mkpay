@@ -93,6 +93,50 @@ public class AccountController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Get current user's profile
+    /// </summary>
+    [HttpGet("profile")]
+    [ProducesResponseType(typeof(ApiResponse<UserProfileDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<UserProfileDto>>> GetProfile()
+    {
+        try
+        {
+            var userId = GetCurrentUserId();
+            var profile = await _accountService.GetProfileAsync(userId);
+
+            if (profile == null)
+                return NotFound(ApiResponse<UserProfileDto>.ErrorResponse("User not found"));
+
+            return Ok(ApiResponse<UserProfileDto>.SuccessResponse(profile));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting profile for user");
+            return BadRequest(ApiResponse<UserProfileDto>.ErrorResponse(ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Update current user's profile
+    /// </summary>
+    [HttpPatch("profile")]
+    [ProducesResponseType(typeof(ApiResponse<UserProfileDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<UserProfileDto>>> UpdateProfile([FromBody] UpdateProfileDto dto)
+    {
+        try
+        {
+            var userId = GetCurrentUserId();
+            var profile = await _accountService.UpdateProfileAsync(userId, dto);
+            return Ok(ApiResponse<UserProfileDto>.SuccessResponse(profile));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating profile for user");
+            return BadRequest(ApiResponse<UserProfileDto>.ErrorResponse(ex.Message));
+        }
+    }
+
     // Helper method to get current user ID from JWT token
     private Guid GetCurrentUserId()
     {
