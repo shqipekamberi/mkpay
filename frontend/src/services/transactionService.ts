@@ -11,7 +11,7 @@ export interface Transaction {
 }
 
 export interface SendMoneyRequest {
-    recipientEmail: string;
+    receiverEmail: string;
     amount: number;
     description?: string;
 }

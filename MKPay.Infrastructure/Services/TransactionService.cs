@@ -96,7 +96,6 @@ public class TransactionService : ITransactionService
                 // 9. Mark transaction as completed
                 transaction.Status = TransactionStatus.Completed;
                 transaction.UpdatedAt = DateTime.UtcNow;
-                await _unitOfWork.Transactions.UpdateAsync(transaction);
 
                 // 10. Log the transaction
                 await _unitOfWork.AuditLogs.LogActionAsync(
