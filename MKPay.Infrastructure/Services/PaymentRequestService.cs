@@ -13,15 +13,18 @@ public class PaymentRequestService : IPaymentRequestService
     private readonly IUnitOfWork _unitOfWork;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ITransactionService _transactionService;
+    private readonly IEmailService _emailService;
 
     public PaymentRequestService(
         IUnitOfWork unitOfWork,
         UserManager<ApplicationUser> userManager,
-        ITransactionService transactionService)
+        ITransactionService transactionService,
+        IEmailService emailService)
     {
         _unitOfWork = unitOfWork;
         _userManager = userManager;
         _transactionService = transactionService;
+        _emailService = emailService;
     }
 
     public async Task<PaymentRequestResponseDto> CreatePaymentRequestAsync(
@@ -68,6 +71,14 @@ public class PaymentRequestService : IPaymentRequestService
             "System"
         );
         await _unitOfWork.SaveChangesAsync();
+
+        var requester = await _userManager.FindByIdAsync(requesterId.ToString());
+        await _emailService.SendTransactionNotificationAsync(
+            requestee.Email!,
+            $"{requestee.FirstName} {requestee.LastName}",
+            request.Amount,
+            "PaymentRequest"
+        );
 
         return await MapToDtoAsync(paymentRequest);
     }
